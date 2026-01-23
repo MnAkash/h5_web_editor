@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>H5 Trajectory Editor</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div id="root">
+      <div id="panel">
+        <h2>H5 Trajectory Editor</h2>
+        <div class="section">
+          <label class="label">Input H5</label>
+          <input id="h5File" type="file" accept=".h5,.hdf5" />
+          <div id="fileStatus" class="status">No file loaded</div>
+        </div>
+
+        <div class="section">
+          <label class="label">Demo</label>
+          <select id="demoSelect"></select>
+        </div>
+
+        <div class="section">
+          <label class="label">Selected Point</label>
+          <div id="pointInfo">None</div>
+        </div>
+
+        <div class="section">
+          <label class="label">Position</label>
+          <div class="row">
+            <span>X</span><input id="xInput" type="number" step="0.001" />
+          </div>
+          <div class="row">
+            <span>Y</span><input id="yInput" type="number" step="0.001" />
+          </div>
+          <div class="row">
+            <span>Z</span><input id="zInput" type="number" step="0.001" />
+          </div>
+          <button id="applyBtn">Apply</button>
+          <button id="deselectBtn">Deselect</button>
+        </div>
+
+        <div class="section">
+          <label class="label">Axis Lock</label>
+          <div class="row">
+            <button class="axisBtn" data-axis="free">Free</button>
+            <button class="axisBtn" data-axis="x">X</button>
+            <button class="axisBtn" data-axis="y">Y</button>
+            <button class="axisBtn" data-axis="z">Z</button>
+          </div>
+        </div>
+
+        <div class="section">
+          <label class="label">Point Size</label>
+          <input id="sizeInput" type="number" min="0.001" max="0.05" step="0.001" value="0.001" />
+        </div>
+
+        <div class="section">
+          <label class="label">Save As</label>
+          <input id="outputName" type="text" placeholder="edited.h5" />
+          <button id="saveBtn">Save</button>
+          <a id="downloadLink" href="#" target="_blank"></a>
+        </div>
+
+        <div class="section">
+          <label class="label">Tips</label>
+          <div class="hint">
+            Left-click a point to select. Drag the gizmo to move it. Scroll to zoom.
+          </div>
+        </div>
+      </div>
+
+      <div id="viewer"></div>
+    </div>
+
+    <script type="module" src="/static/app.js"></script>
+  </body>
+</html>
