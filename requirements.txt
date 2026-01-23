@@ -1,0 +1,6 @@
+fastapi
+h5py
+numpy
+pydantic
+python-multipart
+uvicorn
