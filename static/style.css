@@ -36,6 +36,13 @@ h2 {
   padding-bottom: 12px;
 }
 
+#uploadSection.drag-over {
+  background: #f3f7ff;
+  border: 1px dashed #4c78a8;
+  border-radius: 6px;
+  padding: 12px;
+}
+
 .label {
   display: block;
   font-weight: 600;
@@ -68,6 +75,28 @@ button:hover {
   background: #e8e8e8;
 }
 
+#rectSelectBtn.active,
+#rectSelectBtn[aria-pressed="true"] {
+  background: #e3eef9;
+  border-color: #4c78a8;
+  color: #0f2c4a;
+}
+
+#rectSelectBtn:active {
+  background: #d2e3f5;
+}
+
+#gridToggleBtn.active,
+#gridToggleBtn[aria-pressed="true"] {
+  background: #e7f5ea;
+  border-color: #4c9f70;
+  color: #123b2a;
+}
+
+#gridToggleBtn:active {
+  background: #d8eee0;
+}
+
 .axisBtn {
   flex: 1;
 }
@@ -88,4 +117,15 @@ button:hover {
   margin-top: 6px;
   color: #2a6df4;
   text-decoration: none;
+}
+
+#selectionRect {
+  position: absolute;
+  top: 0;
+  left: 0;
+  border: 1px dashed #4c78a8;
+  background: rgba(76, 120, 168, 0.12);
+  display: none;
+  pointer-events: none;
+  z-index: 5;
 }

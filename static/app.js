@@ -5,6 +5,7 @@ import { TransformControls } from "/static/vendor_transformcontrols.js";
 const viewer = document.getElementById("viewer");
 const fileInput = document.getElementById("h5File");
 const fileStatus = document.getElementById("fileStatus");
+const uploadSection = document.getElementById("uploadSection");
 const demoSelect = document.getElementById("demoSelect");
 const pointInfo = document.getElementById("pointInfo");
 const xInput = document.getElementById("xInput");
@@ -12,17 +13,23 @@ const yInput = document.getElementById("yInput");
 const zInput = document.getElementById("zInput");
 const applyBtn = document.getElementById("applyBtn");
 const deselectBtn = document.getElementById("deselectBtn");
+const rectSelectBtn = document.getElementById("rectSelectBtn");
+const gridToggleBtn = document.getElementById("gridToggleBtn");
 const axisButtons = Array.from(document.querySelectorAll(".axisBtn"));
 const sizeInput = document.getElementById("sizeInput");
 const outputName = document.getElementById("outputName");
 const saveBtn = document.getElementById("saveBtn");
 const downloadLink = document.getElementById("downloadLink");
+const selectionRect = document.getElementById("selectionRect");
 
 let fileId = null;
 let eefPos = [];
 let selectedIdx = null;
+let selectedIndices = new Set();
+let selectionMode = "point";
 let axisMode = "free";
 let pointSize = parseFloat(sizeInput?.value || "0.001");
+let gridVisible = true;
 const undoStack = [];
 let dragStart = null;
 
@@ -55,10 +62,13 @@ const selectedColor = new THREE.Color(0xe45756);
 let pointsGeom = null;
 let pointsObj = null;
 let lineObj = null;
+let gridHelper = null;
 let handle = new THREE.Object3D();
 scene.add(handle);
 let pointTexture = null;
 let clickStart = null;
+let rectStart = null;
+let rectActive = false;
 
 function resize() {
   const w = viewer.clientWidth;
@@ -114,6 +124,7 @@ function buildScene(points) {
   scene.add(lineObj);
 
   updatePickThreshold();
+  updateGrid(points);
   fitCamera(points);
 }
 
@@ -149,27 +160,96 @@ function fitCamera(points) {
   controls.update();
 }
 
-function setSelected(idx) {
-  selectedIdx = idx;
-  if (!pointsGeom) return;
-  const colors = pointsGeom.getAttribute("color");
-  for (let i = 0; i < colors.count; i++) {
-    colors.setXYZ(i, baseColor.r, baseColor.g, baseColor.b);
+function updateGrid(points) {
+  if (gridHelper) {
+    scene.remove(gridHelper);
+    gridHelper = null;
   }
-  if (idx !== null && idx >= 0) {
-    colors.setXYZ(idx, selectedColor.r, selectedColor.g, selectedColor.b);
-    const pos = getPoint(idx);
+  if (points.length === 0) {
+    gridHelper = createGridHelper(1, new THREE.Vector3(0, 0, 0));
+    if (gridVisible) scene.add(gridHelper);
+    return;
+  }
+  const box = new THREE.Box3();
+  for (const p of points) {
+    box.expandByPoint(new THREE.Vector3(p[0], p[1], p[2]));
+  }
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, 0.001);
+  const gridSize = Math.max(maxDim * 2, 0.1);
+  gridHelper = createGridHelper(gridSize, center);
+  if (gridVisible) scene.add(gridHelper);
+}
+
+function createGridHelper(gridSize, center) {
+  const divisions = 20;
+  const helper = new THREE.GridHelper(gridSize, divisions, 0xc0c0c0, 0xe0e0e0);
+  helper.rotation.x = Math.PI / 2;
+  helper.position.set(center.x, center.y, center.z);
+  if (Array.isArray(helper.material)) {
+    for (const mat of helper.material) {
+      mat.transparent = true;
+      mat.opacity = 0.6;
+    }
+  } else {
+    helper.material.transparent = true;
+    helper.material.opacity = 0.6;
+  }
+  return helper;
+}
+
+function setGridVisible(visible) {
+  gridVisible = visible;
+  if (!gridHelper) {
+    updateGrid(eefPos);
+  }
+  if (gridHelper) {
+    if (gridVisible) {
+      scene.add(gridHelper);
+    } else {
+      scene.remove(gridHelper);
+    }
+  }
+  if (gridToggleBtn) {
+    gridToggleBtn.classList.toggle("active", !gridVisible);
+    gridToggleBtn.setAttribute("aria-pressed", (!gridVisible).toString());
+    gridToggleBtn.textContent = gridVisible ? "Hide Grid" : "Show Grid";
+  }
+}
+
+function setSelection(indices) {
+  selectedIndices = new Set(indices);
+  selectedIdx = selectedIndices.size === 1 ? indices[0] : null;
+
+  if (pointsGeom) {
+    const colors = pointsGeom.getAttribute("color");
+    for (let i = 0; i < colors.count; i++) {
+      colors.setXYZ(i, baseColor.r, baseColor.g, baseColor.b);
+    }
+    for (const idx of selectedIndices) {
+      if (idx >= 0 && idx < colors.count) {
+        colors.setXYZ(idx, selectedColor.r, selectedColor.g, selectedColor.b);
+      }
+    }
+    colors.needsUpdate = true;
+  }
+
+  if (selectedIdx !== null && eefPos[selectedIdx]) {
+    const pos = getPoint(selectedIdx);
     handle.position.set(pos[0], pos[1], pos[2]);
     transform.attach(handle);
-    pointInfo.textContent = `Index ${idx}`;
+    pointInfo.textContent = `Index ${selectedIdx}`;
     xInput.value = pos[0].toFixed(5);
     yInput.value = pos[1].toFixed(5);
     zInput.value = pos[2].toFixed(5);
   } else {
     transform.detach();
-    pointInfo.textContent = "None";
+    pointInfo.textContent = selectedIndices.size > 1 ? `Selected ${selectedIndices.size}` : "None";
+    xInput.value = "";
+    yInput.value = "";
+    zInput.value = "";
   }
-  colors.needsUpdate = true;
 }
 
 function getPoint(idx) {
@@ -205,19 +285,116 @@ function setAxisMode(mode) {
   }
 }
 
+function updateSelectionRectVisual(startX, startY, endX, endY) {
+  if (!selectionRect) return;
+  const viewerRect = viewer.getBoundingClientRect();
+  const left = Math.min(startX, endX) - viewerRect.left;
+  const top = Math.min(startY, endY) - viewerRect.top;
+  const width = Math.abs(endX - startX);
+  const height = Math.abs(endY - startY);
+  selectionRect.style.left = `${left}px`;
+  selectionRect.style.top = `${top}px`;
+  selectionRect.style.width = `${width}px`;
+  selectionRect.style.height = `${height}px`;
+}
+
+function endRectSelection() {
+  rectActive = false;
+  if (selectionRect) {
+    selectionRect.style.display = "none";
+  }
+  controls.enabled = selectionMode !== "rect";
+}
+
+function selectPointsInRect(startX, startY, endX, endY) {
+  if (!pointsGeom) return;
+  const rect = renderer.domElement.getBoundingClientRect();
+  const minX = Math.min(startX, endX);
+  const maxX = Math.max(startX, endX);
+  const minY = Math.min(startY, endY);
+  const maxY = Math.max(startY, endY);
+  const selected = [];
+  for (let i = 0; i < eefPos.length; i++) {
+    const pos = eefPos[i];
+    const proj = new THREE.Vector3(pos[0], pos[1], pos[2]).project(camera);
+    const sx = (proj.x * 0.5 + 0.5) * rect.width + rect.left;
+    const sy = (-proj.y * 0.5 + 0.5) * rect.height + rect.top;
+    if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY) {
+      selected.push(i);
+    }
+  }
+  setSelection(selected);
+}
+
+function setSelectionMode(mode) {
+  selectionMode = mode;
+  const isRect = selectionMode === "rect";
+  if (rectSelectBtn) {
+    rectSelectBtn.classList.toggle("active", isRect);
+    rectSelectBtn.setAttribute("aria-pressed", isRect ? "true" : "false");
+  }
+  if (isRect) {
+    controls.enabled = false;
+    controls.enableRotate = false;
+    controls.enablePan = false;
+  } else {
+    controls.enabled = true;
+    controls.enableRotate = true;
+    controls.enablePan = true;
+    if (rectActive) endRectSelection();
+    rectStart = null;
+  }
+}
+
 renderer.domElement.addEventListener("pointerdown", (event) => {
   if (event.button !== 0) return;
   clickStart = { x: event.clientX, y: event.clientY };
+  if (selectionMode === "rect") {
+    rectStart = { x: event.clientX, y: event.clientY };
+    rectActive = true;
+    if (selectionRect) {
+      selectionRect.style.display = "block";
+      updateSelectionRectVisual(rectStart.x, rectStart.y, rectStart.x, rectStart.y);
+    }
+    controls.enabled = false;
+  }
+});
+
+renderer.domElement.addEventListener("pointermove", (event) => {
+  if (!rectActive || !rectStart) return;
+  updateSelectionRectVisual(rectStart.x, rectStart.y, event.clientX, event.clientY);
 });
 
 renderer.domElement.addEventListener("pointerup", (event) => {
   if (event.button !== 0) return;
-  if (!pointsGeom || !clickStart) return;
+  if (!clickStart) {
+    if (rectActive) endRectSelection();
+    rectStart = null;
+    return;
+  }
   const dx = event.clientX - clickStart.x;
   const dy = event.clientY - clickStart.y;
+  const dragDistance = Math.hypot(dx, dy);
   clickStart = null;
-  if (transform.dragging) return;
-  if (Math.hypot(dx, dy) > 4) return;
+  if (!pointsGeom) {
+    if (rectActive) endRectSelection();
+    rectStart = null;
+    return;
+  }
+  if (transform.dragging) {
+    if (rectActive) endRectSelection();
+    return;
+  }
+  if (selectionMode === "rect" && rectActive && rectStart) {
+    const start = { ...rectStart };
+    endRectSelection();
+    rectStart = null;
+    if (dragDistance > 4) {
+      selectPointsInRect(start.x, start.y, event.clientX, event.clientY);
+      return;
+    }
+  }
+  if (dragDistance > 4) return;
   const rect = renderer.domElement.getBoundingClientRect();
   mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
   mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -238,7 +415,7 @@ renderer.domElement.addEventListener("pointerup", (event) => {
     }
     if (!best) return;
     const idx = best.idx;
-    setSelected(idx);
+    setSelection([idx]);
   }
 });
 
@@ -260,13 +437,12 @@ transform.addEventListener("mouseUp", () => {
   if (!dragStart) return;
   const current = getPoint(dragStart.idx);
   if (current.some((v, i) => Math.abs(v - dragStart.pos[i]) > 1e-9)) {
-    undoStack.push({ idx: dragStart.idx, prev: dragStart.pos, next: [...current] });
+    undoStack.push({ type: "single", idx: dragStart.idx, prev: dragStart.pos, next: [...current] });
   }
   dragStart = null;
 });
 
-async function uploadFile() {
-  const file = fileInput.files[0];
+async function uploadFileFrom(file) {
   if (!file) {
     fileStatus.textContent = "Select an H5 file first.";
     return;
@@ -295,7 +471,48 @@ async function uploadFile() {
   }
 }
 
+async function uploadFile() {
+  await uploadFileFrom(fileInput.files[0]);
+}
+
 fileInput.addEventListener("change", uploadFile);
+
+function hasFileDrag(event) {
+  return event.dataTransfer && Array.from(event.dataTransfer.types || []).includes("Files");
+}
+
+function setDragHighlight(active) {
+  if (!uploadSection) return;
+  uploadSection.classList.toggle("drag-over", active);
+}
+
+let dragDepth = 0;
+document.addEventListener("dragenter", (event) => {
+  if (!hasFileDrag(event)) return;
+  dragDepth += 1;
+  setDragHighlight(true);
+});
+
+document.addEventListener("dragover", (event) => {
+  if (!hasFileDrag(event)) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "copy";
+});
+
+document.addEventListener("dragleave", (event) => {
+  if (!hasFileDrag(event)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) setDragHighlight(false);
+});
+
+document.addEventListener("drop", (event) => {
+  if (!hasFileDrag(event)) return;
+  event.preventDefault();
+  dragDepth = 0;
+  setDragHighlight(false);
+  const file = event.dataTransfer.files[0];
+  if (file) uploadFileFrom(file);
+});
 
 async function loadDemo() {
   if (!fileId) return;
@@ -305,35 +522,91 @@ async function loadDemo() {
   const data = await res.json();
   eefPos = data.eef_pos;
   buildScene(eefPos);
-  setSelected(null);
+  setSelection([]);
 }
 
 demoSelect.addEventListener("change", loadDemo);
 
 applyBtn.addEventListener("click", () => {
-  if (selectedIdx === null) return;
-  const prev = [...getPoint(selectedIdx)];
-  const pos = [parseFloat(xInput.value), parseFloat(yInput.value), parseFloat(zInput.value)];
-  if (pos.some((v) => Number.isNaN(v))) return;
-  updatePoint(selectedIdx, pos);
-  handle.position.set(pos[0], pos[1], pos[2]);
-  undoStack.push({ idx: selectedIdx, prev, next: [...pos] });
+  if (selectedIndices.size === 0) return;
+  const xVal = parseFloat(xInput.value);
+  const yVal = parseFloat(yInput.value);
+  const zVal = parseFloat(zInput.value);
+  const hasX = !Number.isNaN(xVal);
+  const hasY = !Number.isNaN(yVal);
+  const hasZ = !Number.isNaN(zVal);
+  if (!hasX && !hasY && !hasZ) return;
+
+  const items = [];
+  for (const idx of selectedIndices) {
+    const prev = [...getPoint(idx)];
+    const next = [...prev];
+    if (hasX) next[0] = xVal;
+    if (hasY) next[1] = yVal;
+    if (hasZ) next[2] = zVal;
+    if (next.some((v, i) => Math.abs(v - prev[i]) > 1e-9)) {
+      updatePoint(idx, next);
+      items.push({ idx, prev, next });
+    }
+  }
+
+  if (items.length === 0) return;
+  if (items.length === 1) {
+    const only = items[0];
+    undoStack.push({ type: "single", idx: only.idx, prev: only.prev, next: [...only.next] });
+    if (selectedIdx !== null) {
+      const pos = getPoint(selectedIdx);
+      handle.position.set(pos[0], pos[1], pos[2]);
+      xInput.value = pos[0].toFixed(5);
+      yInput.value = pos[1].toFixed(5);
+      zInput.value = pos[2].toFixed(5);
+    }
+    return;
+  }
+
+  undoStack.push({ type: "bulk", items });
 });
 
 deselectBtn.addEventListener("click", () => {
-  setSelected(null);
+  setSelection([]);
 });
+
+if (rectSelectBtn) {
+  rectSelectBtn.addEventListener("click", () => {
+    setSelectionMode(selectionMode === "rect" ? "point" : "rect");
+  });
+}
+
+if (gridToggleBtn) {
+  gridToggleBtn.addEventListener("click", () => {
+    setGridVisible(!gridVisible);
+  });
+}
 
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
-    setSelected(null);
+    setSelection([]);
   }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
     event.preventDefault();
     const last = undoStack.pop();
     if (!last) return;
-    setSelected(last.idx);
-    updatePoint(last.idx, last.prev);
+    if (last.type === "bulk") {
+      const indices = [];
+      for (const item of last.items) {
+        updatePoint(item.idx, item.prev);
+        indices.push(item.idx);
+      }
+      setSelection(indices);
+      if (last.items.length === 1) {
+        const pos = last.items[0].prev;
+        handle.position.set(pos[0], pos[1], pos[2]);
+      }
+      return;
+    }
+    const idx = last.idx;
+    setSelection([idx]);
+    updatePoint(idx, last.prev);
     handle.position.set(last.prev[0], last.prev[1], last.prev[2]);
   }
 });
@@ -383,4 +656,6 @@ saveBtn.addEventListener("click", async () => {
   downloadLink.click();
 });
 
+setSelectionMode(selectionMode);
+setGridVisible(gridVisible);
 setAxisMode("free");

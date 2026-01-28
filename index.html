@@ -9,10 +9,11 @@
     <div id="root">
       <div id="panel">
         <h2>H5 Trajectory Editor</h2>
-        <div class="section">
+        <div class="section" id="uploadSection">
           <label class="label">Input H5</label>
           <input id="h5File" type="file" accept=".h5,.hdf5" />
           <div id="fileStatus" class="status">No file loaded</div>
+          <div class="hint">Drag & drop a .h5/.hdf5 file here.</div>
         </div>
 
         <div class="section">
@@ -23,6 +24,13 @@
         <div class="section">
           <label class="label">Selected Point</label>
           <div id="pointInfo">None</div>
+        </div>
+
+        <div class="section">
+          <label class="label">Selection Tool</label>
+          <div class="row">
+            <button id="rectSelectBtn">Rect Select</button>
+          </div>
         </div>
 
         <div class="section">
@@ -51,6 +59,13 @@
         </div>
 
         <div class="section">
+          <label class="label">Grid</label>
+          <div class="row">
+            <button id="gridToggleBtn">Hide Grid</button>
+          </div>
+        </div>
+
+        <div class="section">
           <label class="label">Point Size</label>
           <input id="sizeInput" type="number" min="0.001" max="0.05" step="0.001" value="0.001" />
         </div>
@@ -65,12 +80,14 @@
         <div class="section">
           <label class="label">Tips</label>
           <div class="hint">
-            Left-click a point to select. Drag the gizmo to move it. Scroll to zoom.
+            Left-click a point to select. Drag the gizmo to move it. Scroll to zoom. Use Rect Select to drag-select multiple points.
           </div>
         </div>
       </div>
 
-      <div id="viewer"></div>
+      <div id="viewer">
+        <div id="selectionRect"></div>
+      </div>
     </div>
 
     <script type="module" src="/static/app.js"></script>
