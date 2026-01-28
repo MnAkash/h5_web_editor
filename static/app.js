@@ -11,7 +11,9 @@ const pointInfo = document.getElementById("pointInfo");
 const xInput = document.getElementById("xInput");
 const yInput = document.getElementById("yInput");
 const zInput = document.getElementById("zInput");
+const gInput = document.getElementById("gInput");
 const applyBtn = document.getElementById("applyBtn");
+const deleteBtn = document.getElementById("deleteBtn");
 const deselectBtn = document.getElementById("deselectBtn");
 const rectSelectBtn = document.getElementById("rectSelectBtn");
 const gridToggleBtn = document.getElementById("gridToggleBtn");
@@ -24,6 +26,8 @@ const selectionRect = document.getElementById("selectionRect");
 
 let fileId = null;
 let eefPos = [];
+let liveIndices = [];
+let gripperVals = null;
 let selectedIdx = null;
 let selectedIndices = new Set();
 let selectionMode = "point";
@@ -87,7 +91,7 @@ function animate() {
 }
 animate();
 
-function buildScene(points) {
+function buildScene(points, fit = true) {
   if (pointsObj) scene.remove(pointsObj);
   if (lineObj) scene.remove(lineObj);
 
@@ -125,7 +129,9 @@ function buildScene(points) {
 
   updatePickThreshold();
   updateGrid(points);
-  fitCamera(points);
+  if (fit) {
+    fitCamera(points);
+  }
 }
 
 function createCircleTexture() {
@@ -243,12 +249,20 @@ function setSelection(indices) {
     xInput.value = pos[0].toFixed(5);
     yInput.value = pos[1].toFixed(5);
     zInput.value = pos[2].toFixed(5);
+    if (gInput) {
+      if (gripperVals && gripperVals[selectedIdx] !== undefined) {
+        gInput.value = Number(gripperVals[selectedIdx]).toFixed(5);
+      } else {
+        gInput.value = "";
+      }
+    }
   } else {
     transform.detach();
     pointInfo.textContent = selectedIndices.size > 1 ? `Selected ${selectedIndices.size}` : "None";
     xInput.value = "";
     yInput.value = "";
     zInput.value = "";
+    if (gInput) gInput.value = "";
   }
 }
 
@@ -514,6 +528,12 @@ document.addEventListener("drop", (event) => {
   if (file) uploadFileFrom(file);
 });
 
+function normalizeGripperData(gripper) {
+  if (!Array.isArray(gripper)) return null;
+  const flat = gripper.map((value) => (Array.isArray(value) ? value[0] : value));
+  return flat;
+}
+
 async function loadDemo() {
   if (!fileId) return;
   const demoKey = demoSelect.value;
@@ -521,7 +541,13 @@ async function loadDemo() {
   if (!res.ok) return;
   const data = await res.json();
   eefPos = data.eef_pos;
-  buildScene(eefPos);
+  gripperVals = normalizeGripperData(data.gripper);
+  if (gInput) {
+    gInput.disabled = !gripperVals || gripperVals.length === 0;
+    gInput.value = "";
+  }
+  liveIndices = eefPos.map((_, idx) => idx);
+  buildScene(eefPos, true);
   setSelection([]);
 }
 
@@ -532,21 +558,39 @@ applyBtn.addEventListener("click", () => {
   const xVal = parseFloat(xInput.value);
   const yVal = parseFloat(yInput.value);
   const zVal = parseFloat(zInput.value);
+  const gVal = gInput ? parseFloat(gInput.value) : NaN;
   const hasX = !Number.isNaN(xVal);
   const hasY = !Number.isNaN(yVal);
   const hasZ = !Number.isNaN(zVal);
-  if (!hasX && !hasY && !hasZ) return;
+  const hasG = !!gripperVals && !Number.isNaN(gVal);
+  if (!hasX && !hasY && !hasZ && !hasG) return;
 
   const items = [];
   for (const idx of selectedIndices) {
-    const prev = [...getPoint(idx)];
-    const next = [...prev];
-    if (hasX) next[0] = xVal;
-    if (hasY) next[1] = yVal;
-    if (hasZ) next[2] = zVal;
-    if (next.some((v, i) => Math.abs(v - prev[i]) > 1e-9)) {
-      updatePoint(idx, next);
-      items.push({ idx, prev, next });
+    const prevPos = [...getPoint(idx)];
+    const nextPos = [...prevPos];
+    if (hasX) nextPos[0] = xVal;
+    if (hasY) nextPos[1] = yVal;
+    if (hasZ) nextPos[2] = zVal;
+    const posChanged = nextPos.some((v, i) => Math.abs(v - prevPos[i]) > 1e-9);
+
+    let prevGrip;
+    let nextGrip;
+    let gripChanged = false;
+    if (gripperVals) {
+      prevGrip = gripperVals[idx];
+      nextGrip = prevGrip;
+      if (hasG) {
+        nextGrip = gVal;
+        gripChanged = Math.abs(nextGrip - prevGrip) > 1e-9;
+      }
+    }
+
+    if (posChanged) updatePoint(idx, nextPos);
+    if (gripperVals && gripChanged) gripperVals[idx] = nextGrip;
+
+    if (posChanged || gripChanged) {
+      items.push({ idx, prev: prevPos, next: nextPos, prevGrip, nextGrip });
     }
   }
 
@@ -554,18 +598,55 @@ applyBtn.addEventListener("click", () => {
   if (items.length === 1) {
     const only = items[0];
     undoStack.push({ type: "single", idx: only.idx, prev: only.prev, next: [...only.next] });
+    if (only.prevGrip !== undefined) {
+      undoStack[undoStack.length - 1].prevGrip = only.prevGrip;
+      undoStack[undoStack.length - 1].nextGrip = only.nextGrip;
+    }
     if (selectedIdx !== null) {
       const pos = getPoint(selectedIdx);
       handle.position.set(pos[0], pos[1], pos[2]);
       xInput.value = pos[0].toFixed(5);
       yInput.value = pos[1].toFixed(5);
       zInput.value = pos[2].toFixed(5);
+      if (gInput && gripperVals && gripperVals[selectedIdx] !== undefined) {
+        gInput.value = Number(gripperVals[selectedIdx]).toFixed(5);
+      }
     }
     return;
   }
 
   undoStack.push({ type: "bulk", items });
 });
+
+function deleteSelectedPoints() {
+  if (selectedIndices.size === 0) return;
+  const toDelete = Array.from(selectedIndices).sort((a, b) => b - a);
+  const removed = toDelete.map((idx) => ({
+    idx,
+    pos: [...eefPos[idx]],
+    originalIdx: liveIndices[idx],
+    grip: gripperVals ? gripperVals[idx] : undefined,
+  }));
+
+  for (const idx of toDelete) {
+    eefPos.splice(idx, 1);
+    liveIndices.splice(idx, 1);
+    if (gripperVals) gripperVals.splice(idx, 1);
+  }
+
+  undoStack.push({
+    type: "delete",
+    removed: removed.sort((a, b) => a.idx - b.idx),
+  });
+  setSelection([]);
+  buildScene(eefPos, false);
+}
+
+if (deleteBtn) {
+  deleteBtn.addEventListener("click", () => {
+    deleteSelectedPoints();
+  });
+}
 
 deselectBtn.addEventListener("click", () => {
   setSelection([]);
@@ -587,27 +668,42 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     setSelection([]);
   }
+  if (event.key === "Delete") {
+    event.preventDefault();
+    deleteSelectedPoints();
+  }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
     event.preventDefault();
     const last = undoStack.pop();
     if (!last) return;
+    if (last.type === "delete") {
+      for (const item of last.removed) {
+        eefPos.splice(item.idx, 0, item.pos);
+        liveIndices.splice(item.idx, 0, item.originalIdx);
+        if (gripperVals) gripperVals.splice(item.idx, 0, item.grip);
+      }
+      buildScene(eefPos, false);
+      setSelection(last.removed.map((item) => item.idx));
+      return;
+    }
     if (last.type === "bulk") {
       const indices = [];
       for (const item of last.items) {
         updatePoint(item.idx, item.prev);
+        if (gripperVals && item.prevGrip !== undefined) {
+          gripperVals[item.idx] = item.prevGrip;
+        }
         indices.push(item.idx);
       }
       setSelection(indices);
-      if (last.items.length === 1) {
-        const pos = last.items[0].prev;
-        handle.position.set(pos[0], pos[1], pos[2]);
-      }
       return;
     }
     const idx = last.idx;
-    setSelection([idx]);
     updatePoint(idx, last.prev);
-    handle.position.set(last.prev[0], last.prev[1], last.prev[2]);
+    if (gripperVals && last.prevGrip !== undefined) {
+      gripperVals[idx] = last.prevGrip;
+    }
+    setSelection([idx]);
   }
 });
 
@@ -640,7 +736,11 @@ saveBtn.addEventListener("click", async () => {
     demo_key: demoKey,
     eef_pos: eefPos,
     output_name: outName,
+    keep_indices: liveIndices,
   };
+  if (gripperVals) {
+    payload.gripper = gripperVals;
+  }
   const res = await fetch("/api/save", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
